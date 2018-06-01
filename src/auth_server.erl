@@ -109,25 +109,27 @@ handle_cast(_Request, State) ->
   {noreply, NewState :: #state{}} |
   {noreply, NewState :: #state{}, timeout() | hibernate} |
   {stop, Reason :: term(), NewState :: #state{}}).
-handle_info({register,PID,{Email,PasswordHash,First_name, Last_name,Address,Phone_number, Question, Answer}},State) ->
+handle_info({register,PID,First_name, Last_name,PasswordHash,Email,Address,Phone_number, Question, Answer},State) ->
   Msg = add_user(Email,PasswordHash,First_name, Last_name,Address,Phone_number, Question, Answer),
-  PID ! {ok,Msg},
+  PID ! Msg,
   {noreply,State};
 
-handle_info({login,PID,{Email,PasswordHash}},State) ->
+handle_info({login,PID,Email,PasswordHash},State) ->
   Verification = verify_user(Email,PasswordHash),
   case Verification of
     {ok,Token} ->
       PID ! {ok,Token},
       {noreply,update_state(State,Email,Token)};
-    _ -> {error,"Password is incorrect."}
+    _ ->
+      PID ! {error,"Password is incorrect."},
+      {noreply,State}
   end;
 
-handle_info({emergency_question,PID,{Email}},State) ->
+handle_info({emergency_question,PID,Email},State) ->
   PID ! get_help_question(Email),
   {noreply, State};
 
-handle_info({answer_verification,PID,{Email,Answer}},State) ->
+handle_info({answer_verification,PID,Email,Answer},State) ->
   Result = verify_answer(Email,Answer),
   PID ! Result,
   case Result of
@@ -135,14 +137,14 @@ handle_info({answer_verification,PID,{Email,Answer}},State) ->
     _ -> {noreply,State}
   end;
 
-handle_info({change_password,PID,{Email,PasswordHash,Token}},State) ->
+handle_info({change_password,PID,Email,PasswordHash,Token},State) ->
   case token_auth(State,Email,Token) of
     true -> PID ! change_password(Email,PasswordHash);
     _ -> PID ! {error,"You don't have permission to co this action"}
   end,
   {noreply,State};
 
-handle_info({get_info,PID,{Email,Token}},State) ->
+handle_info({get_info,PID,Email,Token},State) ->
   case token_auth(State,Email,Token) of
     true -> PID ! give_info(Email);
     _ -> PID ! {error,"Wrong authentification"}
@@ -207,14 +209,17 @@ add_user_impl({ok,Email},PasswordHash,First_name, Last_name,Address,Phone_number
     help_question = Question,
     answer = Answer},
   Relation = #info_about{email = Email , info_id = InfoID},
-
   InsertFun = fun() ->
       mnesia:write(User),
       mnesia:write(UserInfo),
       mnesia:write(Relation),
       ok
     end,
-  mnesia:transaction(InsertFun).
+  Out = mnesia:transaction(InsertFun),
+  case Out of
+    {atomic, _}-> {ok,"Corectly added"};
+    _ -> {error,"Incopleated transaction"}
+  end.
 
 %%%============================
 %%%Removing user from database
@@ -235,12 +240,15 @@ add_user_impl({ok,Email},PasswordHash,First_name, Last_name,Address,Phone_number
 %%%============================
 verify_user(Email,PasswordHash) ->
   {atomic,UserAccount}=mnesia:transaction(fun()->mnesia:read({user,Email})end),
-  [{user,_,PasswordInDatabase}] = UserAccount,
-  if
-    PasswordHash == PasswordInDatabase ->
-      Token = token_generator(Email),
-      {ok,Token};
-    true -> {error,"Password is incorrect."}
+  case UserAccount of
+    [] -> {error,"User does not exist."};
+    [{user,_,PasswordInDatabase}] ->
+      if
+        PasswordHash == PasswordInDatabase ->
+          Token = token_generator(Email),
+          {ok,Token};
+        true -> {error,"Password is incorrect."}
+      end
   end.
 
 %%%============================
@@ -253,7 +261,8 @@ get_help_question(Email)->
     {atomic,[]} ->
       {error,"Incorrect email"};
     {atomic,[Data]} ->
-      {ok,Data#user_info.help_question}
+      {ok,Data#user_info.help_question};
+    _ -> {error,"Unknown help question error"}
   end.
 
 verify_answer(Email, Answer) ->
