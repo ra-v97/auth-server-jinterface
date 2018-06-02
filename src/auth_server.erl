@@ -306,15 +306,15 @@ give_info(Email) ->
 is_correct_email(Email) ->
   Correct_email = re:run(Email,"^[a-z0-9A-Z_%+-]+@[a-z0-9A-Z]+\\.[a-z]{1,4}"),
   case Correct_email of
-    nomatch -> {error,"Invalid email"};
+    nomatch -> io:format("Invalid email"),{error,"Invalid email"};
     {match, _} ->
       DOES_EXIST = mnesia:transaction(fun()->mnesia:read({user,Email})end),
       case DOES_EXIST of
         {atomic,[]} ->
           {ok,Email};
-        {atomic,_} ->
+        {atomic,_} ->io:format("Email already in database"),
           {error,"Email already in database"};
-        _ ->
+        _ ->io:format("Cannot check email in database"),
           {error,"Cannot check email in database"}
       end
   end.
